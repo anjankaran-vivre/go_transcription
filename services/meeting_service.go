@@ -220,53 +220,53 @@ func (s *MeetingService) ProcessMeeting(
 
 	log.Printf("[MeetingService] Saved to database: id=%d", dbID)
 
-	// ── Step 5: Post to Zoho Creator ───────────────────────────────────────
-	//
-	// TO ENABLE ZOHO POST-BACK:
-	// 1. Uncomment the block below
-	// 2. Make sure your MeetingRequest includes:
-	//      zohoOwnerName, zohoAppName, zohoReportName, zohoRecordID
-	// 3. The transcription will be posted to the Zoho Creator record
-	//    using UpdateRecordField (PATCH) for each field.
-	//
-	// ─────────────────────────────────────────────────────────────────────
-	// zohoRecordIDOut := ""
-	//
-	// if zohoOwnerName != "" && zohoAppName != "" && zohoReportName != "" && zohoRecordID != "" {
-	// 	log.Println("[MeetingService] Posting transcription to Zoho Creator...")
-	//
-	// 	ok, errMsg := s.zohoService.UpdateRecordField(
-	// 		ctx,
-	// 		zohoOwnerName,
-	// 		zohoAppName,
-	// 		zohoReportName,
-	// 		zohoRecordID,
-	// 		"Meeting_Transcription",
-	// 		fullTranscription,
-	// 	)
-	// 	if !ok {
-	// 		log.Printf("[MeetingService] WARNING: Failed to update Meeting_Transcription: %s", errMsg)
-	// 	}
-	//
-	// 	ok, errMsg = s.zohoService.UpdateRecordField(
-	// 		ctx,
-	// 		zohoOwnerName,
-	// 		zohoAppName,
-	// 		zohoReportName,
-	// 		zohoRecordID,
-	// 		"Meeting_Summary",
-	// 		summary,
-	// 	)
-	// 	if !ok {
-	// 		log.Printf("[MeetingService] WARNING: Failed to update Meeting_Summary: %s", errMsg)
-	// 	}
-	//
-	// 	if ok {
-	// 		zohoRecordIDOut = zohoRecordID
-	// 		log.Printf("[MeetingService] Zoho record updated: %s", zohoRecordID)
-	// 	}
-	// }
-	// ─────────────────────────────────────────────────────────────────────
+	── Step 5: Post to Zoho Creator ───────────────────────────────────────
+	
+	TO ENABLE ZOHO POST-BACK:
+	1. Uncomment the block below
+	2. Make sure your MeetingRequest includes:
+	     zohoOwnerName, zohoAppName, zohoReportName, zohoRecordID
+	3. The transcription will be posted to the Zoho Creator record
+	   using UpdateRecordField (PATCH) for each field.
+	
+	─────────────────────────────────────────────────────────────────────
+	zohoRecordIDOut := ""
+	
+	if zohoOwnerName != "" && zohoAppName != "" && zohoReportName != "" && zohoRecordID != "" {
+		log.Println("[MeetingService] Posting transcription to Zoho Creator...")
+	
+		ok, errMsg := s.zohoService.UpdateRecordField(
+			ctx,
+			zohoOwnerName,
+			zohoAppName,
+			zohoReportName,
+			zohoRecordID,
+			"Meeting_Transcription",
+			fullTranscription,
+		)
+		if !ok {
+			log.Printf("[MeetingService] WARNING: Failed to update Meeting_Transcription: %s", errMsg)
+		}
+	
+		ok, errMsg = s.zohoService.UpdateRecordField(
+			ctx,
+			zohoOwnerName,
+			zohoAppName,
+			zohoReportName,
+			zohoRecordID,
+			"Meeting_Summary",
+			summary,
+		)
+		if !ok {
+			log.Printf("[MeetingService] WARNING: Failed to update Meeting_Summary: %s", errMsg)
+		}
+	
+		if ok {
+			zohoRecordIDOut = zohoRecordID
+			log.Printf("[MeetingService] Zoho record updated: %s", zohoRecordID)
+		}
+	}
+	─────────────────────────────────────────────────────────────────────
 
 	// Final summary
 	log.Println(strings.Repeat("=", 80))

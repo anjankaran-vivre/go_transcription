@@ -370,6 +370,33 @@ func removeRepetitiveText(text string) string {
 	return text
 }
 
+func removeRepetitiveTextPreserveLines(text string) string {
+	if len(text) < 10 {
+		return text
+	}
+
+	lines := strings.Split(text, "\n")
+	deduped := make([]string, 0, len(lines))
+	seen := make(map[string]bool)
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+
+		normalized := strings.ToLower(trimmed)
+
+		if seen[normalized] {
+			continue
+		}
+		seen[normalized] = true
+		deduped = append(deduped, trimmed)
+	}
+
+	return strings.Join(deduped, "\n")
+}
+
 // removeRepeatingBlocks detects and removes blocks that repeat 3+ times.
 func removeRepeatingBlocks(text string, minBlockLen int) string {
 	if len(text) < minBlockLen*3 {
@@ -564,44 +591,32 @@ func (s *TranscriptionService) transcribeChunk(
 		)
 	}
 
-	systemPrompt := `You are an expert meeting transcription specialist.
+systemPrompt := `You are an expert meeting transcription specialist.
 You MUST output ONLY in English language. This is mandatory.
 
 Your task:
-1. Listen to the audio carefully
-2. Try to identify speakers by their actual name if anyone addresses them by name during the conversation
-3. If names are not mentioned, identify speakers by their role or context (e.g., "Manager", "Team Lead", "Developer") based on what they discuss
-4. If no name or role can be determined, use Speaker 1, Speaker 2, etc.
-5. Translate everything into English (even if audio is in Hindi, Tamil, Telugu, or any other language)
-6. Output a clean speaker-labeled transcript
+1. Listen to the audio carefully from start to finish
+2. Transcribe exactly what is spoken — word for word
+3. Translate everything into English (Hindi, Tamil, Telugu, or any other language)
+4. Do NOT hallucinate or add words that were not spoken
+5. Do NOT summarize or paraphrase — write exactly what was said
 
-Output format (strictly follow this):
-[Speaker Name or Role]: [English translation of what they said]
-
-Examples of good speaker identification:
-Rahul: I will complete the task by Friday.
-Manager: Good, make sure to test it first.
-Speaker 3: I agree with that approach.
-
-Critical rules:
-- Output MUST be in English only - no Hindi, no other language
-- Translate every word spoken into English
-- Use actual names if you hear them being called by name (e.g., if someone says "Rahul, what do you think?" label that person as Rahul)
-- Use role-based labels if context makes it clear (Manager, Developer, Team Lead, HR, etc.)
-- Only fall back to Speaker 1, Speaker 2, etc. if no name or role can be identified
-- Each speaker turn must be on a new line
-- Do not add timestamps, notes, or commentary
-- If someone repeats themselves, write it only once
-- Keep the natural flow and meaning of the conversation
-- Be consistent — once you identify a speaker by name, use that name throughout`
+Output rules:
+- Plain text only — no speaker labels, no timestamps, no formatting
+- Every new sentence or thought on a new line
+- Translate every single word into English
+- If a word is a proper noun or name (like Rahul, Anan, Pritam, Zoho, SQL) keep it as-is
+- Do not add commentary, descriptions, or notes
+- Do not repeat sentences
+- Do not make up content — only transcribe what you actually hear
+- If audio is unclear or silent, skip it — do not guess`
 
 	userPrompt := fmt.Sprintf(
-    "IMPORTANT: Output in ENGLISH ONLY. "+
-        "Transcribe and translate this meeting recording into English. "+
-        "Identify speakers by their actual name if mentioned in conversation, "+
-        "or by their role/context if clear, otherwise use Speaker 1, Speaker 2, etc. "+
-        "Even if speakers are talking in Hindi or any other language, "+
-        "translate everything to English.%s",
+		"IMPORTANT: Output in ENGLISH ONLY. "+
+			"Transcribe this meeting recording exactly word for word into English. "+
+			"Translate everything spoken — do not skip anything. "+
+			"Do not add anything that was not spoken. "+
+			"Keep proper nouns and names exactly as heard.%s",
 		contextNote,
 	)
 
@@ -666,41 +681,41 @@ func (s *TranscriptionService) generateSummary(
 		inputText = inputText[:25000]
 	}
 
-	systemPrompt := `You are a professional meeting summarizer.
-Create a structured, clear summary of the meeting transcript.
+		systemPrompt := `You are a professional meeting summarizer.
+		Create a structured, clear summary of the meeting transcript.
 
-Format your response EXACTLY like this:
+		Format your response EXACTLY like this:
 
-**Meeting Overview**
-[2-3 sentences describing the overall purpose and outcome of the meeting]
+		*Meeting Overview:
+		[2-3 sentences describing the overall purpose and outcome of the meeting]
 
-**Key Discussion Points**
-• [Main topic discussed]
-• [Another topic discussed]
-• [Another topic discussed]
+		*Key Discussion Points:
+		• [Main topic discussed]
+		• [Another topic discussed]
+		• [Another topic discussed]
 
-**Decisions Made**
-• [Decision 1]
-• [Decision 2]
+		*Decisions Made:
+		• [Decision 1]
+		• [Decision 2]
 
-**Action Items**
-• [Action item with responsible person if mentioned]
-• [Action item with responsible person if mentioned]
+		*Action Items:
+		• [Action item with responsible person if mentioned]
+		• [Action item with responsible person if mentioned]
 
-**Next Steps**
-• [What happens next]
-• [Follow up items]
+		*Next Steps:
+		• [What happens next]
+		• [Follow up items]
 
-Rules:
-- Only include sections that have content from the transcript
-- Do not invent or assume anything not in the transcript
-- Keep each bullet point concise and clear
-- If no decisions or action items were mentioned, skip those sections`
+		Rules:
+		- Only include sections that have content from the transcript
+		- Do not invent or assume anything not in the transcript
+		- Keep each bullet point concise and clear
+		- If no decisions or action items were mentioned, skip those sections`
 
-	userPrompt := fmt.Sprintf(
-		"Create a structured meeting summary with bullet points from this transcript:\n\n%s",
-		inputText,
-	)
+		userPrompt := fmt.Sprintf(
+			"Create a structured meeting summary with bullet points from this transcript:\n\n%s",
+			inputText,
+		)
 	// For summary we send text only — no audio
 	reqBody := openRouterRequest{
 		Model: s.config.OpenRouterModel,
@@ -834,12 +849,13 @@ func (s *TranscriptionService) TranscribeAudio(
 		return nil, fmt.Errorf("%s", errMsg), elapsed, false
 	}
 
+	
 	// ── Combine ──
 	log.Printf("[TranscriptionService] Combining %d transcription(s)...",
-		len(transcriptions))
+	len(transcriptions))
 
-	fullTranscription := strings.Join(transcriptions, " ")
-	fullTranscription = removeRepetitiveText(fullTranscription)
+	fullTranscription := strings.Join(transcriptions, "\n")
+	fullTranscription = removeRepetitiveTextPreserveLines(fullTranscription)
 
 	wordCount := len(strings.Fields(fullTranscription))
 	charCount := len(fullTranscription)
@@ -892,41 +908,84 @@ func (s *TranscriptionService) TranscribeAudio(
 }
 //------------------saving log in json file --------------
 
-// logResultToFile saves transcription result as JSON to logs/transcription_results.json
-func (s *TranscriptionService) logResultToFile(
-	recordID string,
-	result *TranscribeResult,
-) {
-	type jsonLog struct {
-		ID            string `json:"id"`
-		Transcription string `json:"transcription"`
-		Summary       string `json:"summary"`
+// logResultToFile saves transcription result as formatted JSON to logs/transcription_results.json
+	func (s *TranscriptionService) logResultToFile(
+		recordID string,
+		result *TranscribeResult,
+	) {
+		os.MkdirAll("logs", 0755)
+		logFilePath := filepath.Join("logs", "transcription_results.json")
+
+		f, err := os.OpenFile(logFilePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			log.Printf("[TranscriptionService] ERROR: open log file: %v", err)
+			return
+		}
+		defer f.Close()
+
+		// ── Write formatted entry manually ──
+		// This keeps newlines readable instead of \n escape sequences
+		entry := fmt.Sprintf(
+			"{\n"+
+				"  \"id\": %s,\n"+
+				"  \"transcription\": %s,\n"+
+				"  \"summary\": %s\n"+
+				"}\n"+
+				"---\n",
+			jsonString(recordID),
+			jsonMultiline(result.FullConversation),
+			jsonMultiline(result.Summary),
+		)
+
+		if _, err := f.WriteString(entry); err != nil {
+			log.Printf("[TranscriptionService] ERROR: write log: %v", err)
+			return
+		}
+
+		log.Printf("[TranscriptionService] Result saved to %s", logFilePath)
 	}
 
-	logData := jsonLog{
-		ID:            recordID,
-		Transcription: result.FullConversation,
-		Summary:       result.Summary,
+	// jsonString encodes a plain string value as a JSON string.
+func jsonString(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
+}
+
+// jsonMultiline writes a string as a JSON array of lines.
+// Each line becomes a separate element so the file is human-readable.
+//
+// Example output in file:
+//
+//	[
+//	  "Speaker 1: Hello everyone.",
+//	  "Speaker 2: Hi, good morning.",
+//	  "Speaker 1: Let us begin the meeting."
+//	]
+func jsonMultiline(s string) string {
+	lines := strings.Split(s, "\n")
+
+	// Remove empty trailing lines
+	for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
+		lines = lines[:len(lines)-1]
 	}
 
-	jsonBytes, err := json.MarshalIndent(logData, "", "  ")
-	if err != nil {
-		log.Printf("[TranscriptionService] ERROR: marshal JSON log: %v", err)
-		return
+	if len(lines) == 0 {
+		return `""`
 	}
 
-	os.MkdirAll("logs", 0755)
-	logFilePath := filepath.Join("logs", "transcription_results.json")
-
-	f, err := os.OpenFile(logFilePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		log.Printf("[TranscriptionService] ERROR: open log file: %v", err)
-		return
+	var sb strings.Builder
+	sb.WriteString("[\n")
+	for i, line := range lines {
+		b, _ := json.Marshal(strings.TrimRight(line, "\r"))
+		sb.WriteString("    ")
+		sb.Write(b)
+		if i < len(lines)-1 {
+			sb.WriteString(",")
+		}
+		sb.WriteString("\n")
 	}
-	defer f.Close()
-
-	f.WriteString(string(jsonBytes) + "\n")
-	log.Printf("[TranscriptionService] Result saved to %s", logFilePath)
+	sb.WriteString("  ]")
+	return sb.String()
 }
 // ─── Singleton ────────────────────────────────────────────────────────────────
 
