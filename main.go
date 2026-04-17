@@ -37,9 +37,9 @@ func main() {
 	// ── Initialise database ──────────────────────────────────────────────────
 	log.Println("[Main] Initialising database...")
 	if err := database.InitDB(database.DBConfig{
-		DBHost: cfg.DBHost,
-		DBServer: cfg.DBServer,
-		DBName:  cfg.DBName,
+		DBHost:     cfg.DBHost,
+		DBServer:   cfg.DBServer,
+		DBName:     cfg.DBName,
 		DBUsername: cfg.DBUsername,
 		DBPassword: cfg.DBPassword,
 	}); err != nil {
@@ -60,7 +60,7 @@ func main() {
 
 	// ── Initialise token manager ─────────────────────────────────────────────
 	// Tokens are saved to / loaded from cfg.TokensDir/zoho_tokens.json
-	// Default: <project_root>/secrets/zoho_tokens.json
+	// First-time token obtained via GET /zoho/auth/url → browser → Allow
 	log.Printf("[Main] Token storage directory: %s", cfg.TokensDir)
 	tokenManager := utils.NewTokenManager(zohoConfig, cfg.TokensDir)
 
@@ -82,10 +82,10 @@ func main() {
 		},
 	)
 
-
-
-	// Zoho Creator service
-	zohoCreatorService := services.NewZohoCreatorService(
+	// Zoho Meeting Post service
+	// Handles: get token → build payload → POST to Zoho Creator form
+	// Owner / App / Form are constants inside zoho_meeting_post_service.go
+	zohoMeetingPostService := services.NewZohoMeetingPostService(
 		cfg.ZohoCreatorURL,
 		tokenManager,
 	)
@@ -98,7 +98,7 @@ func main() {
 		meetingRepo,
 		audioService,
 		transcriptionService,
-		zohoCreatorService,
+		zohoMeetingPostService, // ← ZohoMeetingPostService (not ZohoCreatorService)
 		tokenManager,
 		cfg.MaxAudioSizeMB,
 		cfg.TimeoutSeconds,
@@ -201,20 +201,20 @@ func (rw *responseWriter) WriteHeader(code int) {
 // ─── Banner ───────────────────────────────────────────────────────────────────
 
 func printBanner() {
-	log.Println("=" + fmt.Sprintf("%s", "=============================================="))
+	log.Println("=" + strings.Repeat("=", 46))
 	log.Println("   TRANSCRIPTION SERVER (Go)")
-	log.Println("=" + fmt.Sprintf("%s", "=============================================="))
+	log.Println("=" + strings.Repeat("=", 46))
 }
 
 func printStartup(cfg *config.Settings, addr string) {
-	log.Println(fmt.Sprintf("%s", strings.Repeat("=", 60)))
+	log.Println(strings.Repeat("=", 60))
 	log.Println("  TRANSCRIPTION SERVER READY")
-	log.Println(fmt.Sprintf("%s", strings.Repeat("=", 60)))
+	log.Println(strings.Repeat("=", 60))
 	log.Printf("  API       : http://%s", addr)
 	log.Printf("  Version   : %s", appVersion)
 	log.Printf("  Model     : %s", cfg.OpenRouterModel)
 	log.Printf("  DB        : %s", cfg.DBName)
-	log.Println("  ─────────────────────────────────────────────────────")
+	log.Println("  " + strings.Repeat("─", 57))
 	log.Println("  ENDPOINTS:")
 	log.Printf("  GET  http://%s/health", addr)
 	log.Printf("  POST http://%s/meeting", addr)
@@ -222,15 +222,10 @@ func printStartup(cfg *config.Settings, addr string) {
 	log.Printf("  GET  http://%s/zoho/auth/generate-tokens", addr)
 	log.Printf("  GET  http://%s/zoho/token/status", addr)
 	log.Printf("  POST http://%s/zoho/token/refresh", addr)
-	log.Println("  ─────────────────────────────────────────────────────")
-	log.Println("  ZOHO SETUP (first time):")
-	log.Printf("  1. GET  http://%s/zoho/auth/url", addr)
-	log.Println("  2. Open the URL in your browser")
-	log.Println("  3. Click Allow")
-	log.Printf("  4. Tokens saved to: %s/zoho_tokens.json", cfg.TokensDir)
-	log.Println("  ─────────────────────────────────────────────────────")
-	log.Println("  TO ENABLE ZOHO POST-BACK after transcription:")
-	log.Println("  1. Add zoho fields to your /meeting payload")
-	log.Println("  2. Uncomment Step 5 in services/meeting_service.go")
-	log.Println(fmt.Sprintf("%s", strings.Repeat("=", 60)))
+	log.Println("  " + strings.Repeat("─", 57))
+	// log.Println("  ZOHO SETUP (first time only):")
+	// log.Printf("  1. GET  http://%s/zoho/auth/url", addr)
+	// log.Println("  2. Open the URL in your browser and click Allow")
+	// log.Printf("  3. Tokens saved to: %s/zoho_tokens.json", cfg.TokensDir)
+	log.Println(strings.Repeat("=", 60))
 }

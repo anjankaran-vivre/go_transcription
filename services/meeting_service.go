@@ -20,7 +20,7 @@ type MeetingService struct {
 	repo           *database.MeetingRecordingRepo
 	audioService   *AudioService
 	transcription  *TranscriptionService
-	zohoService    *ZohoCreatorService
+	zohoSvc        *ZohoMeetingPostService // zoho_meeting_post_service.go
 	tokenManager   *utils.TokenManager
 	httpClient     *http.Client
 	maxAudioSizeMB int64
@@ -32,7 +32,7 @@ func NewMeetingService(
 	repo *database.MeetingRecordingRepo,
 	audioService *AudioService,
 	transcription *TranscriptionService,
-	zohoService *ZohoCreatorService,
+	zohoSvc *ZohoMeetingPostService,
 	tokenManager *utils.TokenManager,
 	maxAudioSizeMB int64,
 	timeoutSeconds int,
@@ -41,7 +41,7 @@ func NewMeetingService(
 		repo:           repo,
 		audioService:   audioService,
 		transcription:  transcription,
-		zohoService:    zohoService,
+		zohoSvc:        zohoSvc,
 		tokenManager:   tokenManager,
 		maxAudioSizeMB: maxAudioSizeMB,
 		timeoutSeconds: timeoutSeconds,
@@ -62,10 +62,7 @@ type MeetingResult struct {
 	FileSizeBytes        int64
 	AudioSizeBytes       int64
 	ProcessingTime       float64
-
-	// ZohoRecordID is populated only when Zoho post-back is enabled.
-	// Currently empty — see TO ENABLE ZOHO comment below.
-	ZohoRecordID string
+	ZohoRecordID         string // populated when Zoho form post succeeds
 }
 
 // ─── Main Pipeline ────────────────────────────────────────────────────────────
@@ -75,7 +72,11 @@ type MeetingResult struct {
 //  2. Extract audio track (MP3) via ffmpeg
 //  3. Transcribe + summarise via OpenRouter
 //  4. Save result to database
-//  5. (Optional) Post transcription to Zoho Creator
+//  5. Create a new record in Zoho Creator (AI_Meeting_Transcription)
+//
+// zohoOwnerName / zohoAppName / zohoReportName / zohoRecordID are kept for
+// backward compatibility with the existing route — they are accepted but
+// routing is now handled via constants in zoho_meeting_post_service.go.
 //
 // Returns (result, errorMessage).
 // On failure result is nil and errorMessage describes what went wrong.
@@ -87,12 +88,13 @@ func (s *MeetingService) ProcessMeeting(
 	createdTime string,
 	meetingTitle string,
 
-	// Zoho write-back params — passed through but not used yet.
-	// TO ENABLE ZOHO POST: see Step 5 below.
-	zohoOwnerName string,
-	zohoAppName string,
-	zohoReportName string,
-	zohoRecordID string,
+	// These params are kept so the existing route call does not break.
+	// Owner / App / Form are now constants in zoho_meeting_post_service.go
+	// so these values are no longer used for routing.
+	zohoOwnerName  string, // kept for route compatibility
+	zohoAppName    string, // kept for route compatibility
+	zohoReportName string, // kept for route compatibility (was used for PATCH, now unused)
+	zohoRecordID   string, // kept for route compatibility (was existing record ID, now unused)
 ) (*MeetingResult, string) {
 
 	startTime := time.Now()
@@ -107,7 +109,7 @@ func (s *MeetingService) ProcessMeeting(
 	log.Println(strings.Repeat("=", 80))
 
 	// ── Step 1: Download video ─────────────────────────────────────────────
-	log.Println("[MeetingService] Step 1/4: Downloading meeting file...")
+	log.Println("[MeetingService] Step 1/5: Downloading meeting file...")
 
 	videoBytes, err := s.downloadFile(ctx, downloadURL)
 	if err != nil {
@@ -142,7 +144,7 @@ func (s *MeetingService) ProcessMeeting(
 	}
 
 	// ── Step 2: Extract audio ──────────────────────────────────────────────
-	log.Println("[MeetingService] Step 2/4: Extracting audio from file...")
+	log.Println("[MeetingService] Step 2/5: Extracting audio from file...")
 
 	audioResult, err := s.audioService.ExtractAudioFromVideo(videoBytes)
 	if err != nil {
@@ -165,7 +167,7 @@ func (s *MeetingService) ProcessMeeting(
 	log.Printf("[MeetingService] Audio extracted: %d bytes (%s)", audioSize, audioResult.Format)
 
 	// ── Step 3: Transcribe ─────────────────────────────────────────────────
-	log.Println("[MeetingService] Step 3/4: Transcribing audio...")
+	log.Println("[MeetingService] Step 3/5: Transcribing audio...")
 
 	transcribeResult, transcribeErr, transTime, _ := s.transcription.TranscribeAudio(
 		ctx,
@@ -202,7 +204,7 @@ func (s *MeetingService) ProcessMeeting(
 	log.Printf("[MeetingService]   • Summary       : %d chars", len(summary))
 
 	// ── Step 4: Save to database ───────────────────────────────────────────
-	log.Println("[MeetingService] Step 4/4: Saving to database...")
+	log.Println("[MeetingService] Step 4/5: Saving to database...")
 
 	dbID := s.saveRecord(ctx, &database.MeetingRecordingRow{
 		FileID:                fileID,
@@ -220,61 +222,43 @@ func (s *MeetingService) ProcessMeeting(
 
 	log.Printf("[MeetingService] Saved to database: id=%d", dbID)
 
-	── Step 5: Post to Zoho Creator ───────────────────────────────────────
-	
-	TO ENABLE ZOHO POST-BACK:
-	1. Uncomment the block below
-	2. Make sure your MeetingRequest includes:
-	     zohoOwnerName, zohoAppName, zohoReportName, zohoRecordID
-	3. The transcription will be posted to the Zoho Creator record
-	   using UpdateRecordField (PATCH) for each field.
-	
-	─────────────────────────────────────────────────────────────────────
-	zohoRecordIDOut := ""
-	
-	if zohoOwnerName != "" && zohoAppName != "" && zohoReportName != "" && zohoRecordID != "" {
-		log.Println("[MeetingService] Posting transcription to Zoho Creator...")
-	
-		ok, errMsg := s.zohoService.UpdateRecordField(
-			ctx,
-			zohoOwnerName,
-			zohoAppName,
-			zohoReportName,
-			zohoRecordID,
-			"Meeting_Transcription",
-			fullTranscription,
-		)
-		if !ok {
-			log.Printf("[MeetingService] WARNING: Failed to update Meeting_Transcription: %s", errMsg)
-		}
-	
-		ok, errMsg = s.zohoService.UpdateRecordField(
-			ctx,
-			zohoOwnerName,
-			zohoAppName,
-			zohoReportName,
-			zohoRecordID,
-			"Meeting_Summary",
-			summary,
-		)
-		if !ok {
-			log.Printf("[MeetingService] WARNING: Failed to update Meeting_Summary: %s", errMsg)
-		}
-	
-		if ok {
-			zohoRecordIDOut = zohoRecordID
-			log.Printf("[MeetingService] Zoho record updated: %s", zohoRecordID)
-		}
-	}
-	─────────────────────────────────────────────────────────────────────
+	// ── Step 5: Create Zoho Creator form record ────────────────────────────
+	// Uses ZohoMeetingPostService.CreateRecord()
+	// Owner / App / Form are constants in zoho_meeting_post_service.go —
+	// no routing params needed from the caller.
+	log.Println("[MeetingService] Step 5/5: Creating Zoho Creator form record...")
 
-	// Final summary
+	zohoNewRecordID := ""
+
+	if s.zohoSvc != nil {
+		recordID, zohoErr := s.zohoSvc.CreateRecord(ctx, &CreateMeetingRecordRequest{
+			FileID:        fileID,
+			MeetingTitle:  meetingTitle,
+			CreatedTime:   createdTime,
+			Permalink:     permalink,
+			Transcription: fullTranscription,
+			Summary:       summary,
+		})
+
+		if zohoErr != "" {
+			// Non-fatal — DB record saved, Zoho post failed
+			log.Printf("[MeetingService] WARNING: Zoho post failed: %s", zohoErr)
+		} else {
+			zohoNewRecordID = recordID
+			log.Printf("[MeetingService] Zoho Creator record created: %s", zohoNewRecordID)
+		}
+	} else {
+		log.Println("[MeetingService] Skipping Zoho post — zohoSvc not initialised")
+	}
+
+	// ── Final summary ──────────────────────────────────────────────────────
 	log.Println(strings.Repeat("=", 80))
 	log.Println("[MeetingService] PROCESSING COMPLETED SUCCESSFULLY")
 	log.Printf("[MeetingService]   • Database ID   : %d", dbID)
 	log.Printf("[MeetingService]   • File size     : %d bytes", fileSize)
 	log.Printf("[MeetingService]   • Audio size    : %d bytes", audioSize)
 	log.Printf("[MeetingService]   • Total time    : %.2fs", processingTime)
+	log.Printf("[MeetingService]   • Zoho Record ID: %s", zohoNewRecordID)
 	log.Println(strings.Repeat("=", 80))
 
 	return &MeetingResult{
@@ -285,22 +269,20 @@ func (s *MeetingService) ProcessMeeting(
 		FileSizeBytes:        fileSize,
 		AudioSizeBytes:       audioSize,
 		ProcessingTime:       processingTime,
-		ZohoRecordID:         "", // empty until Zoho post-back is enabled
+		ZohoRecordID:         zohoNewRecordID,
 	}, ""
 }
 
 // ─── Private Helpers ──────────────────────────────────────────────────────────
 
-// downloadFile downloads a file from a URL.
-// It tries with OAuth token first; if the URL is already authenticated
-// (pre-signed URL), it works without a token too.
+// downloadFile downloads a file from a URL using the Zoho OAuth token.
+// Pre-signed URLs work without it — token is attached only when available.
 func (s *MeetingService) downloadFile(ctx context.Context, downloadURL string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
 
-	// Attach OAuth token if available
 	token, tokenErr := s.tokenManager.GetToken(ctx)
 	if tokenErr == nil && token != "" {
 		req.Header.Set("Authorization", "Zoho-oauthtoken "+token)
@@ -340,8 +322,7 @@ func (s *MeetingService) saveRecord(
 	return id
 }
 
-// strPtr returns a pointer to the string s.
-// Used for nullable database fields.
+// strPtr returns a pointer to s — used for nullable database fields.
 func strPtr(s string) *string {
 	return &s
 }
@@ -352,12 +333,16 @@ func strPtr(s string) *string {
 var DefaultMeetingService *MeetingService
 
 // InitMeetingService creates the singleton.
-// Call once in main.go after all dependencies are ready.
+//
+// Call order in main.go:
+//
+//	tokenManager := utils.NewTokenManager(cfg, tokensDir)             // 1. zoho_auth
+//	InitZohoMeetingPostService(creatorBaseURL, tokenManager)           // 2. zoho_meeting_post_service
+//	InitMeetingService(repo, audio, transcription, tokenManager, ...)  // 3. this
 func InitMeetingService(
 	repo *database.MeetingRecordingRepo,
 	audioService *AudioService,
 	transcription *TranscriptionService,
-	zohoService *ZohoCreatorService,
 	tokenManager *utils.TokenManager,
 	maxAudioSizeMB int64,
 	timeoutSeconds int,
@@ -366,9 +351,10 @@ func InitMeetingService(
 		repo,
 		audioService,
 		transcription,
-		zohoService,
+		DefaultZohoMeetingPostService, // singleton from zoho_meeting_post_service.go
 		tokenManager,
 		maxAudioSizeMB,
 		timeoutSeconds,
 	)
+	log.Println("[MeetingService] Initialized")
 }
